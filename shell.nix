@@ -5,9 +5,9 @@ let
   easyPurescript = import (pkgs.fetchFromGitHub {
     owner = "justinwoo";
     repo = "easy-purescript-nix";
-    rev = "907d60008a0d50b183a95d4e723444e643c706dc";
-    sha256 = "0cif0di9wa1m32q6jl69hh8amki2lrn1i5j5dw1sbsxmqlfzrkj0";
-  });
+    rev = "9a8d138663c5d751e3a84f1345166e1f0f760a07";
+    sha256 = "1c0mqn4wxh4bmxnf6hgrhk442kl2m9y315wik87wrw2ikb7s1szf";
+  }) { inherit pkgs; };
 
   psPkgs = import ../release.nix { nixpkgs = pkgs; };
 
@@ -24,9 +24,11 @@ let
 
 in pkgs.mkShell {
   buildInputs = [
-    psPkgs.haskellPackages.spago
+    # psPkgs.haskellPackages.spago
+    easyPurescript.spago
     easyPurescript.inputs.purs
     pkgs.nodejs
+    pkgs.jq
     pkgs.yarn
   ];
 }

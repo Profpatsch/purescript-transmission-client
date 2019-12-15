@@ -2,8 +2,9 @@ module Main where
 
 import Prelude
 
-import Prim.RowList (class RowToList)
+import Control.Alternative ((<|>))
 import Control.Monad.Except (runExcept)
+import Data.Array (filter)
 import Data.Array.NonEmpty (NonEmptyArray)
 import Data.Array.NonEmpty as NonEmpty
 import Data.Either (Either(..))
@@ -21,7 +22,11 @@ import Foreign.Object (Object)
 import Foreign.Object as Object
 import Milkis as M
 import Milkis.Impl.Node (nodeFetch)
+import Prim.RowList (class RowToList)
 import Simple.JSON as JSON
+import Undefined (undefined)
+
+import Dhall.Generic as DG
 
 newtype Query a = Query (CSRFToken -> Aff { newToken :: CSRFToken, result :: a })
 
@@ -42,12 +47,14 @@ data QueryResponse a
 
 data WithResponseData a = WithResponseData a
 
-instance readForeignQueryResponseNoData :: JSON.ReadForeign (QueryResponse Unit) where
+data NoData = NoData
+
+instance readForeignQueryResponseNoData :: JSON.ReadForeign (QueryResponse NoData) where
   readImpl f = do
     s <- JSON.readImpl f :: Foreign.F { result :: String }
     pure $ case s.result of
       "success" -> do
-        QueryResponseSuccess unit
+        QueryResponseSuccess NoData
       err -> QueryResponseError err
 
 instance readForeignQueryResponse :: (RowToList fields fieldList, JSON.ReadForeignFields fieldList () fields) => JSON.ReadForeign (QueryResponse { | fields } ) where
@@ -69,7 +76,7 @@ derive newtype instance showId :: Show Id
 
 data Which
   = AllTorrents
-  | Ids (NonEmptyArray Id)
+  | Ids (Array Id)
 
 type TorrentGetResponse =
   { torrents :: Array Fields
@@ -84,21 +91,93 @@ torrentGet which =
       { fields: requestedFields
       , ids: case which of
           AllTorrents -> Nothing
-          Ids ids -> Just $ NonEmpty.toArray ids
+          Ids ids -> Just ids
       }
     }
 
+data JsonVal
+  = JsonBoolean Boolean
+  | JsonNumber Number
+  | JsonString String
+  | JsonObject (Object JsonVal)
+  | JsonArray (Array JsonVal)
 
--- don’t forget to update fields
-type Fields = {
-  id :: Id
-}
+instance readForeign :: JSON.ReadForeign JsonVal where
+  readImpl f =
+        JsonBoolean <$> JSON.readImpl f
+    <|> JsonNumber <$> JSON.readImpl f
+    <|> JsonString <$> JSON.readImpl f
+    <|> JsonObject <$> JSON.readImpl f
+    <|> JsonArray <$> JSON.readImpl f
+
+instance showJsonVal :: Show JsonVal where
+  show (JsonBoolean b) = show b
+  show (JsonNumber n) = show n
+  show (JsonString s) = show s
+  show (JsonObject o) = show o
+  show (JsonArray a) = show a
+
+-- don’t forget to update requestedFields
+type Fields =
+  { id :: Id
+  , isStalled :: Boolean
+  , name :: String
+  , status :: Status
+  , downloadDir :: String
+  , hashString :: String
+  , files :: Array { bytesCompleted :: Number, length :: Number, name :: String }
+  , fileStats :: Array { bytesCompleted :: Number, wanted :: Boolean{-, priority :: Priority-} }
+  }
 
 -- For now we’ll just gonna list all of the manually.
 -- Late, do some row polymorphism magic to determine the
 -- response type from the type-level list of fields
 requestedFields :: Array String
-requestedFields = [ "id", "files" ]
+requestedFields = [ "id", "isStalled", "name", "status", "downloadDir", "hashString", "files", "fileStats" ]
+
+
+data Status
+  -- torrent is stopped
+  = StatusStopped
+  -- queued to check files
+  | StatusCheckWait
+  -- checking files
+  | StatusCheck
+  -- queued to download
+  | StatusDownloadWait
+  -- downloading
+  | StatusDownload
+  -- queued to seed
+  | StatusSeedWait
+  -- seeding
+  | StatusSeed
+  -- unknown (check transmission.h, tr_torrent_activity
+  | StatusUnknown
+
+instance readForeignStatus :: JSON.ReadForeign Status where
+  readImpl f = do
+    i <- JSON.readImpl f :: Foreign.F Int
+    pure case i of
+      0 -> StatusStopped
+      1 -> StatusCheckWait
+      2 -> StatusCheck
+      3 -> StatusDownloadWait
+      4 -> StatusDownload
+      5 -> StatusSeedWait
+      6 -> StatusSeed
+      _ -> StatusUnknown
+
+instance showStatus :: Show Status where
+    show StatusStopped = "StatusStopped"
+    show StatusCheckWait = "StatusCheckWait"
+    show StatusCheck = "StatusCheck"
+    show StatusDownloadWait = "StatusDownloadWait"
+    show StatusDownload = "StatusDownload"
+    show StatusSeedWait = "StatusSeedWait"
+    show StatusSeed = "StatusSeed"
+    show StatusUnknown = "StatusUnknown"
+
+derive instance eqStatus :: Eq Status
 
 newtype CSRFToken = CSRFToken String
 dummyToken :: CSRFToken
@@ -106,6 +185,7 @@ dummyToken = CSRFToken "dummyToken"
 
 main :: Effect Unit
 main = do
+  {-
   let
     and (Left err) = log $ show err
     and (Right (QueryResponseError err)) = log $ show $ err
@@ -113,9 +193,18 @@ main = do
 
   Aff.runAff_ and $ do
     { result } <- do
-      { newToken } <- runQuery (torrentGet AllTorrents) dummyToken
-      runQuery (torrentGet (AllTorrents)) newToken
+      -- { newToken, result: QueryResponseSuccess result } <- runQuery (torrentGet AllTorrents) dummyToken
+      { newToken, result } <- runQuery (torrentGet AllTorrents) dummyToken
+      case result of
+        QueryResponseError _ -> pure { result, newToken }
+        QueryResponseSuccess res -> do
+          let unfinished = filter (\t -> t.status /= StatusSeed) res.torrents
+          -- liftEffect $ log $ show unfinished
+          runQuery (torrentGet $ Ids $ map (\t -> t.id) unfinished) newToken
     pure result
+  -}
+
+  log $ DG.printTextual (DG.toExp { a: "hi" , b: "lea", tiglenleilelitgeniletgn: "itgenltegnleeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" } :: DG.Exp)
 
 query :: forall a b. JSON.WriteForeign a => JSON.ReadForeign (QueryResponse b) => QueryRequest a -> Query (QueryResponse b)
 query q = Query $ \tok -> do
